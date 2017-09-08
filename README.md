@@ -3,7 +3,7 @@ Kafka Plugins for Akka Persistence
 
 Replicated [Akka Persistence](http://doc.akka.io/docs/akka/2.3.11/scala/persistence.html) journal and snapshot store backed by [Apache Kafka](http://kafka.apache.org/).
 
-This is work in progress by Call Handling to bring the akka persistence kafka journal and snapshot up to date. It will run on Kafka 0.10.2.0 (removing calls to depriciated functions), Akka 2.4.17 and Scala 2.12.1. Documentation will be updated when we have completed and tested the changes. 
+This is work in progress by Call Handling to bring the akka persistence kafka journal and snapshot up to date. It will run on Kafka 0.11.0.0 (removing calls to depriciated functions), Akka 2.5.2 and Scala 2.12.2. Documentation will be updated when we have completed and tested the changes. 
 
 Dependency
 ----------
