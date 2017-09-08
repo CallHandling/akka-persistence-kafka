@@ -9,21 +9,28 @@ import akka.persistence.kafka.BrokerWatcher.BrokersUpdated
 import akka.persistence.kafka.MetadataConsumer.Broker
 import akka.persistence.kafka._
 import akka.persistence.kafka.journal.KafkaJournalProtocol._
-import akka.persistence.{AtomicWrite, PersistentRepr}
-import akka.serialization.{Serialization, SerializationExtension}
+import akka.persistence.AtomicWrite
+import akka.persistence.PersistentRepr
+import akka.serialization.Serialization
+import akka.serialization.SerializationExtension
 import akka.util.Timeout
-import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord}
+import org.apache.kafka.clients.producer.KafkaProducer
+import org.apache.kafka.clients.producer.ProducerRecord
 
 import scala.collection.immutable
 import scala.collection.immutable.Seq
-import scala.concurrent.{Future, Promise}
-import scala.util.{Failure, Success, Try}
+import scala.concurrent.Future
+import scala.concurrent.Promise
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
 
 private case class SeqOfPersistentReprContainer(messages: Seq[PersistentRepr])
 
-private case class ResultMessage(seqVal:Seq[Try[Unit]])
+private case class ResultMessage(seqVal: Seq[Try[Unit]])
 
 class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLogging {
+
   import context.dispatcher
 
   type Deletions = Map[String, (Long, Boolean)]
@@ -52,7 +59,7 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
         val highest = readHighestSequenceNr(persistenceId, fromSequenceNr)
         sender ! ReadHighestSequenceNrSuccess(highest)
       } catch {
-        case e : Exception => sender ! ReadHighestSequenceNrFailure(e)
+        case e: Exception => sender ! ReadHighestSequenceNrFailure(e)
       }
   }
 
@@ -70,11 +77,11 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
   var deletions: Deletions = Map.empty
 
   def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] = {
-    
+
     val promise = Promise[Seq[Try[Unit]]]()
 
     Future.sequence(messages.groupBy(_.persistenceId).map {
-      case (pid,aws) => {
+      case (pid, aws) => {
         val msgs = aws.map(aw => aw.payload).flatten
         writerFor(pid).ask(SeqOfPersistentReprContainer(msgs))(writeTimeout).mapTo[ResultMessage]
       }
@@ -100,7 +107,7 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
   }
 
   private def writerConfig = {
-    KafkaJournalWriterConfig(journalProducerConfig, eventProducerConfig, config.eventTopicMapper, serialization)
+    KafkaJournalWriterConfig(journalProducerConfig, eventProducerConfig, config.eventTopicMapper, serialization, config.eventFilter)
   }
 
 
@@ -115,7 +122,7 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
     val topic = journalTopic(persistenceId)
     leaderFor(topic, brokers) match {
       case Some(Broker(host, port)) => offsetFor(host, port, topic, config.partition)
-      case None                     => fromSequenceNr
+      case None => fromSequenceNr
     }
   }
 
@@ -142,18 +149,20 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
   }
 
   def persistentIterator(host: String, port: Int, topic: String, offset: Long): Iterator[PersistentRepr] = {
-    val adjustedOffset = if(offset < 0) 0 else offset
+    val adjustedOffset = if (offset < 0) 0 else offset
     new MessageIterator(host, port, topic, config.partition, adjustedOffset, config.consumerConfig).map { m =>
       serialization.deserialize(MessageUtil.payloadBytes(m), classOf[PersistentRepr]).get
     }
   }
+
 }
 
 private case class KafkaJournalWriterConfig(
-  journalProducerConfig: Properties,
-  eventProducerConfig: Properties,
-  evtTopicMapper: EventTopicMapper,
-  serialization: Serialization)
+                                             journalProducerConfig: Properties,
+                                             eventProducerConfig: Properties,
+                                             evtTopicMapper: EventTopicMapper,
+                                             serialization: Serialization,
+                                             eventFilter: EventFilter)
 
 private case class UpdateKafkaJournalWriterConfig(config: KafkaJournalWriterConfig)
 
@@ -171,7 +180,7 @@ private class KafkaJournalWriter(var config: KafkaJournalWriterConfig) extends A
 
     case messages: SeqOfPersistentReprContainer =>
       val result = writeMessages(messages.messages)
-      sender ! result 
+      sender ! ResultMessage(result)
   }
 
   def writeMessages(messages: Seq[PersistentRepr]): Seq[Try[Unit]] = {
@@ -179,16 +188,17 @@ private class KafkaJournalWriter(var config: KafkaJournalWriterConfig) extends A
       m <- messages
     } yield new ProducerRecord[String, Array[Byte]](journalTopic(m.persistenceId), "static", config.serialization.serialize(m).get)
 
+    val filteredEvents = messages.map(m => Event(m.persistenceId, m.sequenceNr, m.payload)).filter(config.eventFilter)
+
     val keyedEvents = for {
-      m <- messages
-      e = Event(m.persistenceId, m.sequenceNr, m.payload)
+      e <- filteredEvents
       t <- config.evtTopicMapper.topicsFor(e)
     } yield new ProducerRecord[String, Array[Byte]](t, e.persistenceId, config.serialization.serialize(e).get)
 
     val journalReplies = keyedMsgs.map(record => Try(msgProducer.send(record).get()))
 
     keyedEvents.map(evtProducer.send)
-    
+
     journalReplies.map(_.map(_ => {}))
   }
 

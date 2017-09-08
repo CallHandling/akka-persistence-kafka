@@ -2,7 +2,6 @@ package akka.persistence.kafka.integration
 
 import scala.collection.immutable.Seq
 import scala.concurrent.duration._
-
 import akka.actor._
 import akka.persistence._
 import akka.persistence.SnapshotProtocol._
@@ -11,12 +10,11 @@ import akka.persistence.kafka.journal.KafkaJournalConfig
 import akka.persistence.kafka.server._
 import akka.serialization.SerializationExtension
 import akka.testkit._
-
 import com.typesafe.config.ConfigFactory
-
 import org.scalatest._
-
 import _root_.kafka.message.Message
+
+import scala.concurrent.Await
 
 object KafkaIntegrationSpec {
   val config = ConfigFactory.parseString(
@@ -45,7 +43,7 @@ object KafkaIntegrationSpec {
     }
   }
 
-  class TestPersistentView(val persistenceId: String, val viewId: String, probe: ActorRef) extends PersistentView {
+  class TestPersistentView(val persistenceId: String, val viewId: String, probe: ActorRef) extends  {
     def receive = {
       case s: SnapshotOffer =>
         probe ! s
@@ -80,7 +78,7 @@ class KafkaIntegrationSpec extends TestKit(ActorSystem("test", KafkaIntegrationS
 
   override def afterAll(): Unit = {
     server.stop()
-    system.shutdown()
+    Await.result(system.terminate(),Duration.Inf)
     super.afterAll()
   }
 

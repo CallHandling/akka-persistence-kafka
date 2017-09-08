@@ -21,6 +21,8 @@ class KafkaJournalConfig(config: Config) extends MetadataConsumerConfig(config) 
   val eventTopicMapper: EventTopicMapper =
     CoreUtils.createObject[EventTopicMapper](config.getString("event.producer.topic.mapper.class"))
 
+  val eventFilter:EventFilter = CoreUtils.createObject[EventFilter](config.getString("event.producer.filter.class"))
+
   def journalProducerConfig(brokers: List[Broker]): Properties =
     configToProperties(config.getConfig("producer"),
       Map("metadata.broker.list" -> Broker.toString(brokers), "partition" -> config.getString("partition"),"key.serializer" -> config.getString("key.serializer")))

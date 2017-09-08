@@ -43,3 +43,9 @@ class EventDecoder(system: ActorSystem) extends Decoder[Event] {
   def fromBytes(bytes: Array[Byte]): Event =
     serialization.deserialize(bytes, classOf[Event]).get
 }
+
+trait EventFilter extends ((Event) => Boolean)
+
+class DefaultEventFilter extends EventFilter {
+  override def apply(v1: Event) = true
+}
