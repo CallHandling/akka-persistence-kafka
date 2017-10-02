@@ -1,16 +1,15 @@
 package akka.persistence.kafka.journal
 
 import scala.concurrent.duration._
-
 import akka.actor._
 import akka.persistence.PersistentActor
 import akka.persistence.kafka._
 import akka.persistence.kafka.server._
 import akka.testkit._
-
 import com.typesafe.config.ConfigFactory
-
 import org.scalatest._
+
+import scala.concurrent.Await
 
 object KafkaLoadSpec {
   val config = ConfigFactory.parseString(
@@ -77,7 +76,7 @@ class KafkaLoadSpec extends TestKit(ActorSystem("test", KafkaLoadSpec.config)) w
 
   override def afterAll(): Unit = {
     server.stop()
-    system.shutdown()
+    Await.result(system.whenTerminated,Duration.Inf)
     super.afterAll()
   }
 
