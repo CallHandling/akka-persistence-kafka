@@ -1,7 +1,7 @@
 lazy val commonSettings = Seq(
   name := "akka-persistence-kafka",
   organization := "com.chs",
-  version := "0.6.1",
+  version := "0.6.2",
   scalaVersion := "2.12.1",
   crossScalaVersions := Seq("2.10.4", "2.11.6", "2.12.1"),
   resolvers += "krasserm at bintray" at "http://dl.bintray.com/krasserm/maven",

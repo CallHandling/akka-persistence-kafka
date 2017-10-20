@@ -54,6 +54,7 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
       journalProducerConfig = config.journalProducerConfig(brokers)
       eventProducerConfig = config.eventProducerConfig(brokers)
       writers.foreach(_ ! UpdateKafkaJournalWriterConfig(writerConfig))
+      eventWriters.foreach(_ ! UpdateKafkaJournalWriterConfig(writerConfig))
     case ReadHighestSequenceNr(fromSequenceNr, persistenceId, persistentActor) =>
       try {
         val highest = readHighestSequenceNr(persistenceId, fromSequenceNr)
@@ -71,7 +72,7 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
   var eventProducerConfig = config.eventProducerConfig(brokers)
 
   var writers: Vector[ActorRef] = Vector.fill(config.writeConcurrency)(writer())
-  val writeTimeout = Timeout(config.requestTimeoutInMs)
+  var eventWriters: Vector[ActorRef] = Vector.fill(config.writeConcurrency)(eventWriter())
 
   // Transient deletions only to pass TCK (persistent not supported)
   var deletions: Deletions = Map.empty
@@ -80,12 +81,15 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
 
     val promise = Promise[Seq[Try[Unit]]]()
 
-    Future.sequence(messages.groupBy(_.persistenceId).map {
-      case (pid, aws) => {
-        val msgs = aws.map(aw => aw.payload).flatten
-        writerFor(pid).ask(SeqOfPersistentReprContainer(msgs))(writeTimeout).mapTo[ResultMessage]
+    Future{
+      messages.groupBy(_.persistenceId).toParArray.map {
+        case (pid, aws) => {
+          val msgs = SeqOfPersistentReprContainer(aws.map(aw => aw.payload).flatten)
+          writerFor(pid) ! msgs
+          eventWriterFor(pid) ! msgs
+        }
       }
-    }.toSeq).onComplete {
+    } onComplete {
       case Success(_) => promise.complete(Success(Nil)) // Nil == all good
       case Failure(e) => promise.failure(e)
     }
@@ -104,6 +108,14 @@ class KafkaJournal extends AsyncWriteJournal with MetadataConsumer with ActorLog
 
   private def writer(): ActorRef = {
     context.actorOf(Props(new KafkaJournalWriter(writerConfig)).withDispatcher(config.pluginDispatcher))
+  }
+
+
+  private def eventWriterFor(persistenceId: String): ActorRef =
+    eventWriters(math.abs(persistenceId.hashCode) % config.writeConcurrency)
+
+  private def eventWriter(): ActorRef = {
+    context.actorOf(Props(new KafkaEventsWriter(writerConfig)).withDispatcher(config.pluginDispatcher))
   }
 
   private def writerConfig = {
@@ -168,25 +180,54 @@ private case class UpdateKafkaJournalWriterConfig(config: KafkaJournalWriterConf
 
 private class KafkaJournalWriter(var config: KafkaJournalWriterConfig) extends Actor {
   var msgProducer = createMessageProducer()
-  var evtProducer = createEventProducer()
 
   def receive = {
     case UpdateKafkaJournalWriterConfig(newConfig) =>
       msgProducer.close()
-      evtProducer.close()
       config = newConfig
       msgProducer = createMessageProducer()
-      evtProducer = createEventProducer()
 
     case messages: SeqOfPersistentReprContainer =>
-      val result = writeMessages(messages.messages)
-      sender ! ResultMessage(result)
+      writeMessages(messages.messages)
   }
 
   def writeMessages(messages: Seq[PersistentRepr]): Seq[Try[Unit]] = {
     val keyedMsgs = for {
       m <- messages
     } yield new ProducerRecord[String, Array[Byte]](journalTopic(m.persistenceId), "static", config.serialization.serialize(m).get)
+
+    val journalReplies = keyedMsgs.map(record => Try(msgProducer.send(record).get()))
+
+    journalReplies.map(_.map(_ => {}))
+  }
+
+  override def postStop(): Unit = {
+    msgProducer.close()
+    super.postStop()
+  }
+
+  private def createMessageProducer() = new KafkaProducer[String, Array[Byte]](config.journalProducerConfig)
+
+  private def createEventProducer() = new KafkaProducer[String, Array[Byte]](config.eventProducerConfig)
+}
+
+
+
+private class KafkaEventsWriter(var config: KafkaJournalWriterConfig) extends Actor {
+
+  var evtProducer = createEventProducer()
+
+  def receive = {
+    case UpdateKafkaJournalWriterConfig(newConfig) =>
+      evtProducer.close()
+      config = newConfig
+      evtProducer = createEventProducer()
+
+    case messages: SeqOfPersistentReprContainer =>
+      writeMessages(messages.messages)
+  }
+
+  def writeMessages(messages: Seq[PersistentRepr]): Seq[Try[Unit]] = {
 
     val filteredEvents = messages.map(m => Event(m.persistenceId, m.sequenceNr, m.payload)).filter(config.eventFilter)
 
@@ -195,15 +236,11 @@ private class KafkaJournalWriter(var config: KafkaJournalWriterConfig) extends A
       t <- config.evtTopicMapper.topicsFor(e)
     } yield new ProducerRecord[String, Array[Byte]](t, e.persistenceId, config.serialization.serialize(e).get)
 
-    val journalReplies = keyedMsgs.map(record => Try(msgProducer.send(record).get()))
+    keyedEvents.map(record => Try(evtProducer.send(record).get()).map(_ => ()))
 
-    keyedEvents.map(evtProducer.send)
-
-    journalReplies.map(_.map(_ => {}))
   }
 
   override def postStop(): Unit = {
-    msgProducer.close()
     evtProducer.close()
     super.postStop()
   }
